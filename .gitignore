@@ -1,0 +1,137 @@
+# Python bytecode / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.build/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytestdebug.log
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# If you collect static to a custom folder (adjust if different)
+static/
+
+# Environments
+.env
+.env.*
+*.env
+.venv
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.iml
+*.swp
+*~
+*.orig
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Lint / Security
+.bandit
+bandit.json
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Logs
+logs/
+*.log.*
+
+# Coverage reports
+coverage-report/
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Files that might appear on external disks
+.Spotlight-V100
+.Trashes
+
+# Docker override (optional local only)
+docker-compose.override.yml
+
+# VS Code settings (if any workspace file)
+*.code-workspace
+
+# Cache
+*.cache
+
+# Misc
+profile_default/
+ipython_config.py
+
+# Poetry / Pipenv (if used)
+poetry.lock
+Pipfile.lock
+
+# PyCharm
+*.idea/
+
+# Local scripts / secrets (adjust as needed)
+scripts/local_*/
+secret_*.json
+
