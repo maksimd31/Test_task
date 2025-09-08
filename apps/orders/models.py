@@ -4,6 +4,7 @@ from django.conf import settings
 
 
 class Product(models.Model):
+    """ Model representing a product in the store."""
     name = models.CharField(max_length=255)
     sku = models.CharField(max_length=64, unique=True)
     description = models.TextField(blank=True)
@@ -17,6 +18,7 @@ class Product(models.Model):
         return self.name
 
 class Order(models.Model):
+    """ Model representing a customer order. """
     class Status(models.TextChoices):
         NEW = 'new', 'New'
         PROCESSING = 'processing', 'Processing'
@@ -33,6 +35,7 @@ class Order(models.Model):
         return f"Order #{self.pk} - {self.status}"
 
 class OrderItem(models.Model):
+    """ Model representing an item within an order. """
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
     price = models.DecimalField(max_digits=10, decimal_places=2)
