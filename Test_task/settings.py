@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 from datetime import timedelta
 from pathlib import Path
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -32,14 +33,14 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework',
-    'django_filters',
 
     # Third party apps
     'rest_framework',
     'rest_framework_simplejwt',
+    'django_filters',
     'drf_yasg',
 
+    # Local apps
     'apps.orders',
     'apps.users',
     'apps.products',
@@ -158,11 +159,10 @@ CELERY_RESULT_SERIALIZER = 'json'
 # Cache Configuration
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.memcached.PyLibMCCache',
-        'LOCATION': '127.0.0.1:11211',
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
         'TIMEOUT': 300,  # 5 minutes default
     }
 }
 
-# Добавьте в конец файла
-AUTH_USER_MODEL = 'authentication.User'
+AUTH_USER_MODEL = 'users.User'
