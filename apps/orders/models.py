@@ -2,27 +2,26 @@ from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from decimal import Decimal
+from apps.products.models import Product
+from django.core.cache import cache
 
 
 class Order(models.Model):
     """
-    Customer order record.
+    Customer order model.
 
-    Tracks which user placed the order, the ordered products (via the
-    through model `OrderItem`), the current status, and creation/update
-    timestamps. The `OrderItem` through model stores `quantity` and
-    `price_at_purchase` to ensure historical accuracy of order totals.
+    Represents a customer order containing multiple products through OrderItem.
+    Tracks order status, timestamps, and calculates total price based on items.
 
     Attributes:
-        STATUS_CHOICES: available order statuses.
-        user: reference to the ordering user.
-        products: many-to-many relation to products through OrderItem.
-        status: current order status.
-        created_at: timestamp when the order was created.
-        updated_at: timestamp when the order was last updated.
+        user (ForeignKey): Reference to the user who placed the order
+        products (ManyToManyField): Products in this order via OrderItem through model
+        status (CharField): Current order status (pending, processing, shipped, delivered, cancelled)
+        created_at (DateTimeField): Timestamp when order was created
+        updated_at (DateTimeField): Timestamp when order was last updated
 
     Properties:
-        total_price: decimal total of all order items (quantity * price_at_purchase).
+        total_price: Calculated total price of all order items
     """
 
     STATUS_CHOICES = [
@@ -50,22 +49,36 @@ class Order(models.Model):
             models.Index(fields=['created_at']),
         ]
 
-
     def __str__(self):
-        return f"Order #{self.pk} от {self.user.email}"
+        """Return string representation of the order."""
+        return f"Order #{self.pk} from {self.user.email}"
 
     @property
     def total_price(self):
-        """Calculates the total price of the order."""
+        """
+        Calculate and return the total price of the order.
+
+        Returns:
+            Decimal: Sum of all order items (quantity * price_at_purchase)
+        """
         return sum(item.quantity * item.price_at_purchase for item in self.order_items.all())
 
 
 class OrderItem(models.Model):
     """
-    Through model linking an order and a product.
+    Through model for Order and Product relationship.
 
-    Stores the quantity of the product in the order and the price at the time
-    of purchase for historical accuracy of calculations.
+    Stores the quantity of each product in an order and the price at the time
+    of purchase to maintain historical pricing accuracy.
+
+    Attributes:
+        order (ForeignKey): Reference to the Order
+        product (ForeignKey): Reference to the Product
+        quantity (PositiveIntegerField): Number of items ordered
+        price_at_purchase (DecimalField): Price of the product when order was placed
+
+    Properties:
+        total_price: Calculated total price for this item (quantity * price_at_purchase)
     """
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='order_items', verbose_name='order')
     product = models.ForeignKey('products.Product', on_delete=models.CASCADE, related_name='order_items',
@@ -80,12 +93,16 @@ class OrderItem(models.Model):
         verbose_name = 'Order item'
         verbose_name_plural = 'Order items'
 
-
     def __str__(self):
+        """Return string representation of the order item."""
         return f"{self.product.name} x{self.quantity} in order #{self.order.pk}"
-
 
     @property
     def total_price(self):
-        """Calculates the total price for this order item."""
+        """
+        Calculate and return the total price for this order item.
+
+        Returns:
+            Decimal: Total price (quantity * price_at_purchase)
+        """
         return self.quantity * self.price_at_purchase

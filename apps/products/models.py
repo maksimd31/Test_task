@@ -3,6 +3,29 @@ from django.core.validators import MinValueValidator
 from decimal import Decimal
 
 class Product(models.Model):
+    """
+    Product model representing items available for purchase.
+
+    Stores product information including name, description, pricing,
+    stock levels, and categorization. Includes validation for price
+    and stock management capabilities.
+
+    Attributes:
+        name (CharField): Product name (max 255 characters)
+        description (TextField): Detailed product description
+        price (DecimalField): Product price with 2 decimal places (minimum 0.01)
+        stock (PositiveIntegerField): Available quantity in inventory
+        category (CharField): Product category from predefined choices
+        created_at (DateTimeField): Timestamp when product was created
+        updated_at (DateTimeField): Timestamp when product was last updated
+
+    Methods:
+        is_in_stock(): Check if product has available inventory
+
+    Meta:
+        - Ordered by creation date (newest first)
+        - Indexed on category and price for efficient filtering
+    """
     CATEGORY_CHOICES = [
         ('electronics', 'Electronics'),
         ('clothing', 'Clothing'),
@@ -32,7 +55,14 @@ class Product(models.Model):
         ]
 
     def __str__(self):
+        """Return string representation of the product."""
         return self.name
 
     def is_in_stock(self):
+        """
+        Check if product is currently in stock.
+
+        Returns:
+            bool: True if stock quantity is greater than 0, False otherwise
+        """
         return self.stock > 0
