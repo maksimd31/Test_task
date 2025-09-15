@@ -1,9 +1,6 @@
-from rest_framework import generics, status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework import generics, status, permissions
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
 from .serializers import UserRegistrationSerializer, UserLoginSerializer, UserProfileSerializer
 
@@ -41,7 +38,7 @@ class RegisterView(generics.CreateAPIView):
     """
     queryset = User.objects.all()
     serializer_class = UserRegistrationSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [permissions.AllowAny]
 
     def create(self, request, *args, **kwargs):
         """
@@ -67,67 +64,76 @@ class RegisterView(generics.CreateAPIView):
         }, status=status.HTTP_201_CREATED)
 
 
+
+
 class LoginView(generics.GenericAPIView):
     """
-    User authentication API view.
+    API endpoint for user authentication with JWT.
 
-    POST: Authenticates user and returns JWT tokens.
+    Methods:
+        POST:
+            - Authenticates a user by email and password
+            - Generates JSON Web Tokens (refresh and access)
+            - Returns user profile and tokens on success
 
     Permissions:
-        - Open to all users (AllowAny)
-
-    Features:
-        - Email-based authentication
-        - JWT token generation
-        - Secure password validation
-        - Returns user profile and tokens on success
+        - AllowAny (open endpoint, no authentication required)
 
     Request Body:
-        - email: User's email address
-        - password: User's password
+        {
+            "email": "user@example.com",
+            "password": "secure_password123"
+        }
 
-    Response:
-        Success (200):
-            - user: User profile information
-            - refresh: JWT refresh token
-            - access: JWT access token
-        Error (401):
-            - error: Authentication error message
+    Responses:
+        200 OK:
+            {
+                "user": { ...profile... },
+                "refresh": "<refresh_token>",
+                "access": "<access_token>"
+            }
+        400 Bad Request:
+            {
+                "error": "Invalid email or password"
+            }
+        403 Forbidden:
+            {
+                "error": "User account is disabled"
+            }
     """
     serializer_class = UserLoginSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request, *args, **kwargs):
         """
-        Authenticate user and generate JWT tokens.
+        Handle POST request for user login.
+
+        Steps:
+            1. Deserialize and validate incoming credentials
+            2. Authenticate user
+            3. Issue JWT refresh + access tokens
+            4. Return serialized user profile and tokens
 
         Args:
-            request: HTTP request with login credentials
+            request (Request): HTTP request containing login credentials.
 
         Returns:
-            Response: User profile and JWT tokens or error message
+            Response: JSON with tokens and user data, or error message.
         """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        email = serializer.validated_data['email']
-        password = serializer.validated_data['password']
+        user = serializer.validated_data["user"]
+        refresh = RefreshToken.for_user(user)
 
-        # Authenticate user using email as username
-        user = authenticate(request, username=email, password=password)
-
-        if user:
-            refresh = RefreshToken.for_user(user)
-            return Response({
-                'user': UserProfileSerializer(user).data,
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-            })
-        else:
-            return Response({
-                'error': 'Invalid credentials'
-            }, status=status.HTTP_401_UNAUTHORIZED)
-
+        return Response(
+            {
+                "user": UserProfileSerializer(user).data,
+                "refresh": str(refresh),
+                "access": str(refresh.access_token),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 class ProfileView(generics.RetrieveUpdateAPIView):
     """
@@ -154,7 +160,7 @@ class ProfileView(generics.RetrieveUpdateAPIView):
         - date_joined: Account creation date (read-only)
     """
     serializer_class = UserProfileSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
         """

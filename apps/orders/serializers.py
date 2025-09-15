@@ -1,8 +1,11 @@
 from rest_framework import serializers
 from django.db import transaction
+from django.conf import settings
 from .models import Order, OrderItem
 from apps.products.models import Product
 from apps.products.serializers import ProductSerializer
+from decimal import Decimal
+from .services import create_order
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -160,31 +163,24 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             ValidationError: If validation fails
         """
         items = data.get('items', [])
-        total_amount = 0
-        
+        total_amount = Decimal('0.00')
         for item in items:
             try:
                 product = Product.objects.get(id=item['product_id'])
-                total_amount += product.price * item['quantity']
             except Product.DoesNotExist:
                 raise serializers.ValidationError(f"Product with ID {item['product_id']} not found")
-
-        # Minimum order amount validation
-        if total_amount < 1:
-            raise serializers.ValidationError("Minimum order amount must be greater than 1")
-
+            total_amount += product.price * item['quantity']
+        if total_amount < settings.MIN_ORDER_AMOUNT:
+            min_amount_display = str(int(settings.MIN_ORDER_AMOUNT)) if settings.MIN_ORDER_AMOUNT == settings.MIN_ORDER_AMOUNT.to_integral() else str(settings.MIN_ORDER_AMOUNT)
+            raise serializers.ValidationError(
+                f"Minimum order amount must be at least {min_amount_display}")
         return data
 
-    @transaction.atomic
     def create(self, validated_data):
         """
         Create order with items atomically.
 
-        Performs:
-        - Order creation
-        - Stock validation and management with select_for_update
-        - OrderItem creation with historical pricing
-        - Transaction rollback on any failure
+        Delegates the actual creation logic to the create_order service.
 
         Args:
             validated_data (dict): Validated order data
@@ -193,32 +189,9 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             Order: Created order instance
 
         Raises:
-            ValidationError: If stock is insufficient
+            ValidationError: If stock is insufficient or other validation errors occur
         """
         items_data = validated_data.pop('items')
-        order = Order.objects.create(**validated_data)
-        
-        for item_data in items_data:
-            # Lock product row for update to prevent race conditions
-            product = Product.objects.select_for_update().get(id=item_data['product_id'])
-            quantity = item_data['quantity']
-            
-            # Check stock availability
-            if product.stock < quantity:
-                raise serializers.ValidationError(
-                    f"Insufficient stock for '{product.name}'. Available: {product.stock}"
-                )
-            
-            # Update stock
-            product.stock -= quantity
-            product.save()
-            
-            # Create order item with historical price
-            OrderItem.objects.create(
-                order=order,
-                product=product,
-                quantity=quantity,
-                price_at_purchase=product.price
-            )
-        
+        user = self.context['request'].user
+        order = create_order(user=user, items_data=items_data)
         return order

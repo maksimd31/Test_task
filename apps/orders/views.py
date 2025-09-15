@@ -1,14 +1,16 @@
-from rest_framework import generics, status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework import generics
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.core.cache import cache
-from django.db import transaction
 from django.shortcuts import get_object_or_404
-from .models import Order, OrderItem
+from .models import Order
 from .serializers import OrderSerializer, OrderCreateSerializer
 from .tasks import generate_order_pdf_and_send_email, notify_external_api_order_shipped
-from apps.products.models import Product
+from .cache_utils import (
+    get_order_detail_version,
+    versioned_detail_key,
+    DETAIL_CACHE_TTL,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,170 +18,125 @@ logger = logging.getLogger(__name__)
 
 class OrderListCreateView(generics.ListCreateAPIView):
     """
-    API view for listing and creating orders.
+    API view for listing and creating user orders.
 
-    GET: Returns a list of orders for the authenticated user with pagination.
-    POST: Creates a new order with validation and stock management.
+    GET:
+        - Returns paginated list of orders belonging to the authenticated user.
+        - Prefetches related products for performance.
+    POST:
+        - Creates a new order (atomic) with stock validation and historical price capture.
+        - Triggers asynchronous PDF generation + email sending task.
 
     Permissions:
-        - Authentication required for all actions
+        - Authenticated user only for both listing and creation.
 
-    Features:
-        - Automatic stock management with select_for_update
-        - Asynchronous PDF generation and email sending
-        - Transaction safety for order creation
+    Performance:
+        - Uses prefetch_related to avoid N+1 queries on order items/products.
+
+    Responses:
+        200 OK (list)
+        201 Created (creation success)
+        400 Bad Request (validation / insufficient stock / min amount)
+        401 Unauthorized (no token)
     """
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        """
-        Return orders for the authenticated user only.
-
-        Returns:
-            QuerySet: Orders belonging to the current user with prefetched related data
-        """
-        return Order.objects.filter(user=self.request.user).prefetch_related('order_items__product')
+        return (
+            Order.objects.filter(user=self.request.user)
+            .prefetch_related('order_items__product')
+        )
 
     def get_serializer_class(self):
-        """
-        Return appropriate serializer class based on request method.
-
-        Returns:
-            Serializer: OrderCreateSerializer for POST, OrderSerializer for GET
-        """
-        if self.request.method == 'POST':
-            return OrderCreateSerializer
-        return OrderSerializer
+        return OrderCreateSerializer if self.request.method == 'POST' else OrderSerializer
 
     def perform_create(self, serializer):
-        """
-        Handle order creation with transaction safety and async tasks.
-
-        Args:
-            serializer: Validated order serializer instance
-        """
-        with transaction.atomic():
-            order = serializer.save(user=self.request.user)
-
-            # Start asynchronous task for PDF generation and email sending
-            generate_order_pdf_and_send_email.delay(order.id)
-
-            logger.info(f"Order {order.id} created for user {self.request.user.email}")
+        order = serializer.save()
+        generate_order_pdf_and_send_email.delay(order.id)
+        logger.info("Order %s created for %s", order.id, self.request.user.email)
 
 
 class OrderDetailView(generics.RetrieveUpdateAPIView):
     """
-    API view for retrieving and updating individual orders.
+    Retrieve / update single order with versioned caching.
 
-    GET: Returns order details with caching (1 minute TTL).
-    PATCH: Updates order status with automatic cache invalidation.
+    GET:
+        - Returns order detail (cached by (version, order_id)).
+        - Cache invalidated globally by version bump via signals on any order/order item mutation.
+    PATCH:
+        - Updates status (only allowed for owner or staff via queryset scoping).
+        - Triggers external notification task when status transitions to 'shipped'.
+        - Deletes only the old versioned cache key (version bump handled by signals).
+
+    Caching Strategy:
+        - Key format: order_detail_v{version}_{order_id}
+        - Version stored under 'order_detail_version' and incremented in signals.
+        - perform_update captures the current version before save to delete the specific stale key.
 
     Permissions:
-        - Authentication required
-        - Users can only access their own orders
+        - Authenticated user; queryset restricts access so user sees only own orders unless staff.
 
-    Features:
-        - Memcached caching for performance
-        - Automatic cache invalidation on updates
-        - Celery task triggering for status changes
+    Responses:
+        200 OK (detail / update)
+        401 Unauthorized
+        404 Not Found (not owner / nonexistent)
     """
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        """
-        Return orders for the authenticated user only.
+        qs = Order.objects.all().prefetch_related('order_items__product')
+        return qs if self.request.user.is_staff else qs.filter(user=self.request.user)
 
-        Returns:
-            QuerySet: Orders belonging to the current user with prefetched related data
-        """
-        return Order.objects.filter(user=self.request.user).prefetch_related('order_items__product')
-
-    def get_object(self):
-        """
-        Get order object with caching support.
-
-        Returns:
-            Order: Cached or fresh order instance
-        """
-        order_id = self.kwargs.get('pk')
-        cache_key = f'order_detail_{order_id}'
-
-        # Try to get from cache first
-        cached_order = cache.get(cache_key)
-        if cached_order:
-            return cached_order
-
-        # If not in cache, get from database
-        order = get_object_or_404(self.get_queryset(), pk=order_id)
-
-        # Cache for 1 minute
-        cache.set(cache_key, order, 60)
-        return order
+    def retrieve(self, request, *args, **kwargs):
+        order_id = kwargs.get('pk')
+        version = get_order_detail_version()
+        key = versioned_detail_key(order_id, version)
+        cached = cache.get(key)
+        if cached is not None:
+            return Response(cached)
+        instance = get_object_or_404(self.get_queryset(), pk=order_id)
+        data = self.get_serializer(instance).data
+        cache.set(key, data, DETAIL_CACHE_TTL)
+        return Response(data)
 
     def perform_update(self, serializer):
-        """
-        Handle order updates with cache invalidation and status change handling.
-
-        Args:
-            serializer: Validated order serializer instance
-        """
-        old_status = self.get_object().status
+        instance: Order = self.get_object()
+        old_status = instance.status
+        # Capture version BEFORE save (signals will bump afterwards)
+        current_version = get_order_detail_version()
         order = serializer.save()
-
-        # Clear cache
-        cache.delete(f'order_detail_{order.id}')
-
-        # If status changed to 'shipped', trigger notification task
+        # Invalidate only stale versioned key
+        cache.delete(versioned_detail_key(order.id, current_version))
         if old_status != 'shipped' and order.status == 'shipped':
             notify_external_api_order_shipped.delay(order.id)
-
-        logger.info(f"Order {order.id} status updated to {order.status}")
+        logger.info("Order %s status %s -> %s", order.id, old_status, order.status)
 
 
 class AdminOrderListView(generics.ListAPIView):
     """
-    Admin-only API view for viewing all orders with filtering.
+    Administrative list of all orders with optional filters.
 
-    GET: Returns list of all orders in the system with optional filters.
+    GET Parameters:
+        - status: filter by order status
+        - user_id: filter by owner user id
 
     Permissions:
-        - Authentication required
-        - Staff/admin privileges required
-
-    Query Parameters:
-        - status: Filter by order status
-        - user_id: Filter by user ID
+        - Staff / admin only.
 
     Features:
-        - Comprehensive order filtering
-        - Staff-only access control
-        - Optimized queries with prefetch_related
+        - Prefetch related products for efficiency.
     """
     serializer_class = OrderSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
 
     def get_queryset(self):
-        """
-        Return all orders with filtering for admin users only.
-
-        Returns:
-            QuerySet: All orders if user is staff, empty queryset otherwise
-        """
-        # Check if user is admin/staff
-        if not self.request.user.is_staff:
-            return Order.objects.none()
-
-        queryset = Order.objects.all().prefetch_related('order_items__product')
-
-        # Apply filters
-        status = self.request.query_params.get('status')
+        qs = Order.objects.all().prefetch_related('order_items__product')
+        status_param = self.request.query_params.get('status')
         user_id = self.request.query_params.get('user_id')
-
-        if status:
-            queryset = queryset.filter(status=status)
+        if status_param:
+            qs = qs.filter(status=status_param)
         if user_id:
-            queryset = queryset.filter(user_id=user_id)
-
-        return queryset
+            qs = qs.filter(user_id=user_id)
+        return qs

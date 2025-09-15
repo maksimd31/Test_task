@@ -1,6 +1,9 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from rest_framework.validators import UniqueValidator
+from django.contrib.auth import authenticate
+from rest_framework.exceptions import AuthenticationFailed
 
 User = get_user_model()
 
@@ -33,27 +36,11 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     """
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
+    email = serializers.EmailField(validators=[UniqueValidator(queryset=User.objects.all(), message="User with this email already exists")])
 
     class Meta:
         model = User
         fields = ['username', 'email', 'password', 'password_confirm', 'phone', 'address']
-
-    def validate_email(self, value):
-        """
-        Validate email uniqueness.
-
-        Args:
-            value (str): Email address to validate
-
-        Returns:
-            str: Validated email address
-
-        Raises:
-            ValidationError: If email already exists
-        """
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("User with this email already exists")
-        return value
 
     def validate(self, data):
         """
@@ -89,22 +76,44 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
 class UserLoginSerializer(serializers.Serializer):
     """
-    Serializer for user login authentication.
+    Serializer for authenticating users via email and password.
 
-    Simple serializer for handling login credentials.
-    Used for validating email and password format before authentication.
+    Validates:
+        - Email (used as username in authentication)
+        - Password
+        - User existence and active status
 
-    Fields:
-        - email: User's email address (used as username)
-        - password: User's password
-
-    Features:
-        - Email format validation
-        - Password field (non-empty validation)
-        - No database queries (validation only)
+    Returns:
+        - user: Authenticated User instance
     """
     email = serializers.EmailField()
-    password = serializers.CharField()
+    password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        """
+        Validate user credentials and authenticate.
+
+        Args:
+            attrs (dict): Dictionary containing 'email' and 'password'.
+
+        Raises:
+            serializers.ValidationError: If credentials are invalid.
+
+        Returns:
+            dict: Validated data including the authenticated user instance.
+        """
+        email = attrs.get("email")
+        password = attrs.get("password")
+
+        user = authenticate(username=email, password=password)
+        if not user:
+            raise AuthenticationFailed("Invalid credentials")
+
+        if not user.is_active:
+            raise AuthenticationFailed("User account is disabled")
+
+        attrs["user"] = user
+        return attrs
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
@@ -122,12 +131,6 @@ class UserProfileSerializer(serializers.ModelSerializer):
         - phone: User's phone number (optional)
         - address: User's address (optional)
         - date_joined: Account creation timestamp (read-only)
-
-    Features:
-        - Safe profile information display
-        - Read-only sensitive fields
-        - Optional contact information
-        - No password exposure
     """
     class Meta:
         model = User

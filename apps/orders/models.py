@@ -4,6 +4,7 @@ from django.core.validators import MinValueValidator
 from decimal import Decimal
 from apps.products.models import Product
 from django.core.cache import cache
+from django.db.models import Sum, F, DecimalField, ExpressionWrapper
 
 
 class Order(models.Model):
@@ -37,6 +38,8 @@ class Order(models.Model):
     products = models.ManyToManyField('products.Product', through='OrderItem', related_name='orders',
                                       verbose_name='products')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='status')
+    total_price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'),
+                                      validators=[MinValueValidator(Decimal('0.00'))], verbose_name='total_price')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Creation date')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Updated at')
 
@@ -53,15 +56,13 @@ class Order(models.Model):
         """Return string representation of the order."""
         return f"Order #{self.pk} from {self.user.email}"
 
-    @property
-    def total_price(self):
-        """
-        Calculate and return the total price of the order.
-
-        Returns:
-            Decimal: Sum of all order items (quantity * price_at_purchase)
-        """
-        return sum(item.quantity * item.price_at_purchase for item in self.order_items.all())
+    def recalculate_total(self):
+        total = self.order_items.aggregate(
+            total=Sum(ExpressionWrapper(F('quantity') * F('price_at_purchase'), output_field=DecimalField(max_digits=10, decimal_places=2)))
+        )['total'] or Decimal('0.00')
+        if self.total_price != total:
+            self.total_price = total
+            self.save(update_fields=['total_price'])
 
 
 class OrderItem(models.Model):
