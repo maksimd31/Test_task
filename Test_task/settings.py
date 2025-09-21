@@ -139,7 +139,6 @@ CELERY_TASK_SOFT_TIME_LIMIT = 60
 
 CACHES = {
     'default': {
-        # Unified with ТЗ: используем стандартный MemcachedCache (python-memcached)
         'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
         'LOCATION': os.environ.get('MEMCACHED_URL', '127.0.0.1:11211'),
         'TIMEOUT': 300,
@@ -180,5 +179,14 @@ SPECTACULAR_SETTINGS = {
     'REDOC_UI_SETTINGS': {
         'hideDownloadButton': False,
         'expandResponses': 'all',
+    },
+}
+
+LOGGING = {
+    'loggers': {
+        'django.db.backends': {
+            'level': 'DEBUG',
+            'handlers': ['console'],
+        },
     },
 }

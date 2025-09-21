@@ -2,6 +2,8 @@ import pytest
 from decimal import Decimal
 from rest_framework import serializers
 from unittest.mock import patch, MagicMock
+from concurrent.futures import ThreadPoolExecutor
+from django.test import TransactionTestCase
 
 from apps.orders.services import create_order
 from apps.orders.tasks import generate_order_pdf_and_send_email, notify_external_api_order_shipped
@@ -23,7 +25,8 @@ def test_create_order_service_success(user, product_factory):
     order.refresh_from_db()
     assert order.order_items.count() == 2
 
-    p1.refresh_from_db(); p2.refresh_from_db()
+    p1.refresh_from_db();
+    p2.refresh_from_db()
     assert p1.stock == 3  # 5 - 2
     assert p2.stock == 0  # 2 - 2
 
@@ -75,3 +78,37 @@ def test_notify_external_api_order_shipped_task_failure_retry(user, product_fact
         with pytest.raises(Exception):
             notify_external_api_order_shipped.run(order.id)
 
+
+@pytest.mark.django_db
+def test_overselling_protection_concurrent_orders(user, product_factory):
+    """Тест защиты от overselling при параллельных заказах"""
+    product = product_factory(name="Test", stock=10, price=Decimal('100.00'))
+
+    def create_order_worker(quantity):
+        try:
+            from rest_framework.exceptions import ValidationError
+            return create_order(
+                user=user,
+                items_data=[{'product_id': product.id, 'quantity': quantity}]
+            )
+        except ValidationError:
+            return None
+
+    # Запускаем 5 параллельных заказов по 3 товара (всего 15 > 10)
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(create_order_worker, 3) for _ in range(5)]
+        results = [f.result() for f in futures]
+
+    # Проверяем результат
+    successful_orders = [r for r in results if r is not None]
+    product.refresh_from_db()
+
+    # Должно быть максимум 3 успешных заказа (3*3=9 <= 10)
+    assert len(successful_orders) <= 3
+    assert product.stock >= 0  # Остаток не может быть отрицательным
+
+    # Проверяем консистентность: потрачено = начальный остаток - текущий
+    from django.db.models import Sum
+    total_sold = sum(order.order_items.aggregate(
+        total=Sum('quantity'))['total'] or 0 for order in successful_orders)
+    assert total_sold == 10 - product.stock
